@@ -28,7 +28,7 @@ import java.util.Locale;
 public class AgentDetailActivity extends Activity {
     private TextView tvTitle, tvSub;
     private CountText kSessions, kTokens, kCost, kActive;
-    private LinearLayout sessionList;
+    private LinearLayout permBanner, sessionList;
     private TrendView trendHourly, trendDaily;
     private AgentIcon titleIcon;
     private String base, agentId;
@@ -111,6 +111,13 @@ public class AgentDetailActivity extends Activity {
         inner.setOrientation(LinearLayout.VERTICAL);
         inner.setPadding(0, dp(12), 0, dp(16));
 
+        permBanner = new LinearLayout(this);
+        permBanner.setOrientation(LinearLayout.VERTICAL);
+        permBanner.setVisibility(View.GONE);
+        LinearLayout.LayoutParams pbLp = new LinearLayout.LayoutParams(-1, -2);
+        pbLp.bottomMargin = dp(10);
+        inner.addView(permBanner, pbLp);
+
         // 指标
         LinearLayout kpis = new LinearLayout(this);
         kSessions = kpi(kpis, "会话", true);
@@ -139,7 +146,7 @@ public class AgentDetailActivity extends Activity {
         Anim.enter(trendRow, 200, dp(18));
 
         TextView sh = Theme.text(this, Theme.MUTED, 11, Theme.MEDIUM);
-        sh.setText("会话列表");
+        sh.setText("会话列表  ·  点击会话查看授权详情");
         sh.setLetterSpacing(0.1f);
         sh.setPadding(dp(2), dp(16), 0, dp(8));
         inner.addView(sh);
@@ -216,6 +223,7 @@ public class AgentDetailActivity extends Activity {
         titleIcon.setAgent(agentId, name, accent);
         titleIcon.setStatus(active > 0 ? Theme.GREEN : 0, active > 0);
         tvSub.setText((active > 0 ? "运行中" : "空闲") + (model.isEmpty() ? "" : " · 最近模型 " + model));
+        PermissionSheet.bindPendingBanner(this, permBanner, base, d.optJSONArray("pendingPermissions"), () -> new Thread(this::fetchDetail).start());
 
         JSONObject totals = d.optJSONObject("totals");
         if (totals != null) {
@@ -274,11 +282,15 @@ public class AgentDetailActivity extends Activity {
 
     private View sessionRow(JSONObject s) {
         boolean act = s.optBoolean("active", false);
+        final String sid = s.optString("sessionId", "");
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.setBackground(Theme.panel(this, accent, act ? 0.14f : 0.05f, 14));
         row.setPadding(dp(12), dp(10), dp(14), dp(10));
+        row.setClickable(true);
+        row.setOnClickListener(v -> PermissionSheet.showSessionSheet(this, base != null ? base : "", agentId, sid, accent));
+        Anim.pressable(row);
 
         View stripe = new View(this);
         stripe.setBackground(Theme.pill(this, act ? Theme.GREEN : accent, act ? 1f : 0.5f));
@@ -300,13 +312,27 @@ public class AgentDetailActivity extends Activity {
         long lastAt = s.optLong("lastAt", 0);
         String model = s.optString("model", "");
         int turns = s.optInt("turns", 0);
+        JSONArray tools = s.optJSONArray("tools");
         StringBuilder m = new StringBuilder();
         if (lastAt > 0) m.append(Theme.ago(lastAt));
         if (!model.isEmpty()) m.append(m.length() > 0 ? " · " : "").append(model);
         if (turns > 0) m.append(" · ").append(turns).append(" 轮");
+        if (tools != null && tools.length() > 0) m.append(" · ").append(tools.length()).append(" 项工具");
         meta.setText(m.length() > 0 ? m : "—");
         col.addView(meta);
         row.addView(col, new LinearLayout.LayoutParams(0, -2, 1f));
+
+        String pMode = s.optString("permissionMode", "");
+        if (!pMode.isEmpty() && !"null".equals(pMode)) {
+            int pmc = PermissionSheet.modeColor(pMode);
+            TextView pmBadge = Theme.text(this, pmc, 10, Theme.BOLD);
+            pmBadge.setText("🛡 " + PermissionSheet.modeLabel(pMode));
+            pmBadge.setPadding(dp(8), dp(3), dp(8), dp(3));
+            pmBadge.setBackground(Theme.pill(this, pmc, 0.14f));
+            LinearLayout.LayoutParams pmLp = new LinearLayout.LayoutParams(-2, -2);
+            pmLp.rightMargin = dp(8);
+            row.addView(pmBadge, pmLp);
+        }
 
         if (act) {
             TextView badge = Theme.text(this, Theme.GREEN, 10.5f, Theme.MEDIUM);

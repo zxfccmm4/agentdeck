@@ -86,6 +86,16 @@ final class Theme {
         return String.valueOf(n);
     }
 
+    /** 紧凑格式：三位有效数字以内，308M / 72.1M / 2.8M。 */
+    static String fmtShort(long n) {
+        String[] u = {"", "K", "M", "B"};
+        double v = n;
+        int i = 0;
+        while (v >= 1000 && i < u.length - 1) { v /= 1000; i++; }
+        if (i == 0) return String.valueOf(n);
+        return (v >= 100 ? String.format(Locale.US, "%.0f", v) : String.format(Locale.US, "%.1f", v)) + u[i];
+    }
+
     static String money(double v) { return String.format(Locale.US, "$%.2f", v); }
 
     static String ago(long ts) {

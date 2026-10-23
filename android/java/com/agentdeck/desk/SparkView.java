@@ -11,7 +11,10 @@ import android.graphics.Shader;
 import android.view.View;
 import android.view.animation.DecelerateInterpolator;
 
-/** 卡片内的迷你走势线：首次从左向右展开，之后新旧数据平滑形变。 */
+/**
+ * 卡片内的迷你走势线：首次从左向右展开，之后新旧数据平滑形变。
+ * axis 打开时底部画「-12h / -6h / 现在」刻度，并在峰值处标注数值。
+ */
 final class SparkView extends View {
     private final Paint line = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint area = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -23,6 +26,12 @@ final class SparkView extends View {
     private float morph = 1f, reveal = 0f;
     private int color = Theme.BRAND_A;
     private ValueAnimator anim;
+    private boolean axis;
+    private long[] raw = new long[0];
+    private final Paint tick = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint peak = new Paint(Paint.ANTI_ALIAS_FLAG);
+
+    void setAxis(boolean on) { axis = on; invalidate(); }
 
     SparkView(Context c) {
         super(c);
@@ -34,9 +43,15 @@ final class SparkView extends View {
         base.setStrokeWidth(Theme.dp(c, 1));
         base.setColor(Theme.STROKE);
         base.setPathEffect(new DashPathEffect(new float[]{Theme.dp(c, 3), Theme.dp(c, 3)}, 0));
+        tick.setColor(Theme.FAINT);
+        tick.setTextSize(Theme.dp(c, 9));
+        peak.setTextSize(Theme.dp(c, 10));
+        peak.setTypeface(Theme.BOLD);
+        peak.setTextAlign(Paint.Align.CENTER);
     }
 
     void setData(long[] data, int color) {
+        raw = data == null ? new long[0] : data;
         boolean colorChanged = this.color != color;
         this.color = color;
         long max = 0;
@@ -78,19 +93,35 @@ final class SparkView extends View {
     private void updateShader() {
         int h = getHeight();
         if (h <= 0) return;
-        area.setShader(new LinearGradient(0, 0, 0, h, Theme.alpha(color, 0.32f), Theme.alpha(color, 0f), Shader.TileMode.CLAMP));
+        area.setShader(new LinearGradient(0, 0, 0, h - axisH(), Theme.alpha(color, 0.32f), Theme.alpha(color, 0f), Shader.TileMode.CLAMP));
     }
 
     @Override protected void onSizeChanged(int w, int h, int ow, int oh) { updateShader(); }
+
+    private float axisH() { return axis ? Theme.dp(getContext(), 14) : 0; }
 
     @Override protected void onDetachedFromWindow() {
         if (anim != null) anim.end();
         super.onDetachedFromWindow();
     }
 
+    private void drawAxis(Canvas canvas, int w, int h, float pad) {
+        float y = h - Theme.dp(getContext(), 2);
+        tick.setTextAlign(Paint.Align.LEFT);
+        canvas.drawText("-12h", pad, y, tick);
+        tick.setTextAlign(Paint.Align.CENTER);
+        canvas.drawText("-6h", w / 2f, y, tick);
+        tick.setTextAlign(Paint.Align.RIGHT);
+        canvas.drawText("现在", w - pad, y, tick);
+    }
+
     @Override protected void onDraw(Canvas canvas) {
-        int w = getWidth(), h = getHeight();
+        int w = getWidth();
+        int fullH = getHeight();
         float pad = Theme.dp(getContext(), 5); // 留出末端圆点半径，避免被裁切
+        if (axis) drawAxis(canvas, w, fullH, pad);
+        int h = (int) (fullH - axisH());
+        float top = axis ? Theme.dp(getContext(), 16) : 0; // 峰值标签留白
         float[] v = current();
         boolean empty = true;
         for (float x : v) if (x > 0) { empty = false; break; }
@@ -100,10 +131,15 @@ final class SparkView extends View {
         }
         float step = (w - pad * 2) / (v.length - 1);
         path.reset();
-        float px = pad, py = h - pad - v[0] * (h - pad * 2);
+        float span = h - pad * 2 - top;
+        float px = pad, py = h - pad - v[0] * span;
+        int peakI = 0;
+        for (int i = 1; i < v.length; i++) if (v[i] > v[peakI]) peakI = i;
+        float peakX = px, peakY = py;
         path.moveTo(px, py);
         for (int i = 1; i < v.length; i++) {
-            float x = pad + step * i, y = h - pad - v[i] * (h - pad * 2);
+            float x = pad + step * i, y = h - pad - v[i] * span;
+            if (i == peakI) { peakX = x; peakY = y; }
             float mx = (px + x) / 2f;
             path.cubicTo(mx, py, mx, y, x, y);
             px = x; py = y;
@@ -120,6 +156,13 @@ final class SparkView extends View {
         canvas.drawPath(path, line);
         canvas.restore();
 
+        if (axis && reveal >= 1f && peakI < raw.length && raw[peakI] > 0 && peakI != v.length - 1) {
+            peak.setColor(Theme.alpha(color, 0.9f));
+            float lx = Math.max(Theme.dp(getContext(), 16), Math.min(w - Theme.dp(getContext(), 16), peakX));
+            canvas.drawText(Theme.fmt(raw[peakI]), lx, peakY - Theme.dp(getContext(), 7), peak);
+            dot.setColor(Theme.alpha(color, 0.8f));
+            canvas.drawCircle(peakX, peakY, Theme.dp(getContext(), 2.2f), dot);
+        }
         if (reveal >= 1f) {
             dot.setColor(Theme.alpha(color, 0.3f));
             canvas.drawCircle(px, py, Theme.dp(getContext(), 4.5f), dot);

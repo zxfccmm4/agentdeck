@@ -22,6 +22,8 @@ function parseSession(file, mtime) {
   let costUsd = 0;
   let contextUsed = 0;
   let turns = 0;
+  let permissionMode = 'default';
+  const toolCounts = new Map();
 
   for (const r of rows) {
     const ts = r.timestamp ? Date.parse(r.timestamp) : 0;
@@ -31,6 +33,8 @@ function parseSession(file, mtime) {
     }
     if (r.cwd && !cwd) cwd = r.cwd;
     if (r.sessionId) sessionId = r.sessionId;
+    if (r.type === 'permission-mode' && r.permissionMode) permissionMode = r.permissionMode;
+    if (r.permissionMode) permissionMode = r.permissionMode;
     if (r.type === 'last-prompt' && r.lastPrompt) title = String(r.lastPrompt).replace(/\s+/g, ' ').slice(0, 90);
     if (r.type === 'summary' && r.summary) title = String(r.summary).slice(0, 90);
 
@@ -38,6 +42,13 @@ function parseSession(file, mtime) {
     if (r.type === 'assistant' && m) {
       if (m.model) model = m.model;
       if (r.requestedModel) model = r.requestedModel;
+      if (Array.isArray(m.content)) {
+        for (const c of m.content) {
+          if (c && c.type === 'tool_use' && c.name) {
+            toolCounts.set(c.name, (toolCounts.get(c.name) || 0) + 1);
+          }
+        }
+      }
       const u = m.usage;
       if (u) {
         const out = u.output_tokens || 0;
@@ -64,9 +75,15 @@ function parseSession(file, mtime) {
   if (!title) title = cwd ? shortPath(cwd, 48) : 'Claude 会话';
   tokens.total = tokens.input + tokens.output + tokens.cacheRead + tokens.cacheWrite;
 
+  const tools = [...toolCounts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 8)
+    .map(([name, count]) => ({ name, count }));
+
   const value = {
     agent: 'claude', sessionId, file, title, cwd, model: model || 'claude',
     firstAt, lastAt, tokens, events, costUsd: costUsd || 0, turns, contextUsed,
+    permissionMode, tools,
   };
   cache.set(file, { mtime, value });
   return value;

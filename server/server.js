@@ -16,7 +16,14 @@ let http = require('http');
 let path = require('path');
 let fs = require('fs');
 const os = require('os');
-const { buildDashboard, AGENT_META, agentDetail } = require('./lib/dashboard');
+const { buildDashboard, AGENT_META, agentDetail, sessionPermissionDetail } = require('./lib/dashboard');
+const {
+  setOnChange,
+  getPendingList,
+  getHistoryList,
+  holdPermissionRequest,
+  decidePermission,
+} = require('./lib/permissions');
 
 const PORT = Number(process.env.PORT || argValue('--port') || 7777);
 const HOST = process.env.HOST || '0.0.0.0';
@@ -157,6 +164,8 @@ function mergeHosts(local, remotes) {
     series,
     recent: recent.slice(0, 10),
     agentMeta: AGENT_META,
+    pendingPermissions: getPendingList(),
+    permissionHistory: getHistoryList().slice(0, 8),
   };
 }
 
@@ -186,6 +195,26 @@ function broadcast() {
 setInterval(async () => {
   try { await refresh(); broadcast(); } catch (e) { console.error('[agentdeck] refresh failed', e.message); }
 }, 1000);
+
+setOnChange(() => {
+  refresh().then(() => broadcast()).catch(() => {});
+});
+
+function readBodyJson(req) {
+  return new Promise((resolve, reject) => {
+    let raw = '';
+    req.setEncoding('utf8');
+    req.on('data', (c) => {
+      raw += c;
+      if (raw.length > 512 * 1024) { req.destroy(); reject(new Error('payload too large')); }
+    });
+    req.on('end', () => {
+      if (!raw.trim()) return resolve({});
+      try { resolve(JSON.parse(raw)); } catch (e) { reject(e); }
+    });
+    req.on('error', reject);
+  });
+}
 
 const PREVIEW = `<!doctype html><html><head><meta charset="utf-8"><title>AgentDeck</title>
 <style>body{background:#0b0e14;color:#e6edf3;font:14px/1.5 -apple-system,sans-serif;margin:0;padding:24px}
@@ -229,10 +258,46 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (url.pathname.startsWith('/api/agents/')) {
-    const id = decodeURIComponent(url.pathname.split('/')[3] || '');
+    const parts = url.pathname.split('/').filter(Boolean); // ['api', 'agents', id, ...]
+    const id = decodeURIComponent(parts[2] || '');
+    if (parts[3] === 'sessions' && parts[4]) {
+      const sid = decodeURIComponent(parts[4]);
+      const sDetail = sessionPermissionDetail(id, sid);
+      if (!sDetail) return send(404, JSON.stringify({ error: 'session not found' }));
+      return send(200, JSON.stringify(sDetail));
+    }
     const detail = agentDetail(id);
     if (!detail) return send(404, JSON.stringify({ error: 'unknown agent: ' + id }));
     return send(200, JSON.stringify(detail));
+  }
+
+  if (url.pathname === '/api/permissions' && req.method === 'GET') {
+    return send(200, JSON.stringify({
+      pending: getPendingList(),
+      history: getHistoryList(),
+    }));
+  }
+
+  if (url.pathname === '/api/permissions/hook' && req.method === 'POST') {
+    try {
+      const payload = await readBodyJson(req);
+      const hookOut = await holdPermissionRequest(payload, req);
+      return send(200, JSON.stringify(hookOut || {}));
+    } catch (e) {
+      return send(200, JSON.stringify({}));
+    }
+  }
+
+  if (url.pathname === '/api/permissions/decide' && req.method === 'POST') {
+    try {
+      const body = await readBodyJson(req);
+      const id = String(body.id || url.searchParams.get('id') || '');
+      const action = String(body.action || url.searchParams.get('action') || 'allow');
+      const result = decidePermission(id, action, body.message);
+      return send(result.ok ? 200 : 404, JSON.stringify(result));
+    } catch (e) {
+      return send(400, JSON.stringify({ ok: false, error: e.message }));
+    }
   }
 
   if (url.pathname === '/api/stream') {

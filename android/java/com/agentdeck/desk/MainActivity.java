@@ -3,6 +3,8 @@ package com.agentdeck.desk;
 import android.app.Activity;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.graphics.Paint;
+import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
 import android.os.Handler;
@@ -53,9 +55,13 @@ public class MainActivity extends Activity {
     private SharedPreferences prefs; // 在 onCreate 中初始化（此时 context 可用）
 
     // 顶部
-    private TextView tvTime, tvDate, tvConn;
+    private TextView tvDate, tvWeek, tvConn;
+    private ClockView clockView;
+    private MixBar yearBar;
     private PulseDot connDot;
     private CountText kpiTotal, kpiToday, kpiCost, kpiActive;
+    private View kpisView;
+    private LinearLayout permBanner;
     // 中部
     private LinearLayout cardRow;
     private final Map<String, Card> cards = new HashMap<>();
@@ -98,10 +104,17 @@ public class MainActivity extends Activity {
         View header = buildHeader();
         root.addView(header, new LinearLayout.LayoutParams(-1, -2));
 
-        View kpis = buildKpis();
-        LinearLayout.LayoutParams kLp = new LinearLayout.LayoutParams(-1, dp(46));
+        // 4 个 KPI 指标与待授权审批条同槽位切换：有待批请求时审批条原位替换 KPI 行，绝不遮挡也不挤压下方卡片
+        FrameLayout topSlot = new FrameLayout(this);
+        kpisView = buildKpis();
+        topSlot.addView(kpisView, new FrameLayout.LayoutParams(-1, dp(46)));
+        permBanner = new LinearLayout(this);
+        permBanner.setOrientation(LinearLayout.VERTICAL);
+        permBanner.setVisibility(View.GONE);
+        topSlot.addView(permBanner, new FrameLayout.LayoutParams(-1, -2));
+        LinearLayout.LayoutParams kLp = new LinearLayout.LayoutParams(-1, -2);
         kLp.topMargin = dp(8);
-        root.addView(kpis, kLp);
+        root.addView(topSlot, kLp);
 
         // 中部：agent 卡片 + 右侧占比环
         LinearLayout mid = new LinearLayout(this);
@@ -148,7 +161,7 @@ public class MainActivity extends Activity {
         setContentView(frame);
 
         Anim.enter(header, 0, -dp(10));
-        Anim.enter(kpis, 90, dp(14));
+        Anim.enter(kpisView, 90, dp(14));
         Anim.enter(recentHead, 340, dp(14));
     }
 
@@ -185,16 +198,30 @@ public class MainActivity extends Activity {
         top.addView(buildShare(), new LinearLayout.LayoutParams(-2, dp(46)));
         top.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1f));
 
+        // 时钟：翻滚数字 + 秒环；下方日期 · 星期胶囊 · 年内进度
         LinearLayout clock = new LinearLayout(this);
         clock.setOrientation(LinearLayout.VERTICAL);
         clock.setGravity(Gravity.END);
-        tvTime = Theme.text(this, Theme.TEXT, 28, Theme.LIGHT);
-        tvTime.setFontFeatureSettings("tnum");
-        tvTime.setLetterSpacing(0.03f);
-        tvDate = Theme.text(this, Theme.MUTED, 12, null);
-        tvDate.setPadding(0, dp(3), dp(2), 0);
-        clock.addView(tvTime);
-        clock.addView(tvDate);
+        clockView = new ClockView(this);
+        clock.addView(clockView, new LinearLayout.LayoutParams(-2, dp(40)));
+        LinearLayout dateRow = new LinearLayout(this);
+        dateRow.setGravity(Gravity.CENTER_VERTICAL | Gravity.END);
+        dateRow.setPadding(0, dp(5), dp(2), 0);
+        tvDate = Theme.text(this, Theme.MUTED, 11.5f, Theme.MEDIUM);
+        tvDate.setFontFeatureSettings("tnum");
+        dateRow.addView(tvDate);
+        tvWeek = Theme.text(this, Theme.BRAND_A, 10.5f, Theme.BOLD);
+        tvWeek.setPadding(dp(7), dp(2), dp(7), dp(2));
+        tvWeek.setBackground(Theme.pill(this, Theme.BRAND_A, 0.14f));
+        LinearLayout.LayoutParams wLp = new LinearLayout.LayoutParams(-2, -2);
+        wLp.leftMargin = dp(6);
+        dateRow.addView(tvWeek, wLp);
+        clock.addView(dateRow);
+        // 年内进度细条，宽度与时钟一致
+        yearBar = new MixBar(this);
+        LinearLayout.LayoutParams ybLp = new LinearLayout.LayoutParams(-1, dp(3));
+        ybLp.topMargin = dp(6);
+        clock.addView(yearBar, ybLp);
         top.addView(clock);
         return top;
     }
@@ -300,13 +327,20 @@ public class MainActivity extends Activity {
     };
 
     // SimpleDateFormat not thread-safe; only called on UI thread
-    private final SimpleDateFormat timeFmt = new SimpleDateFormat("HH:mm:ss", Locale.getDefault());
-    private final SimpleDateFormat dateFmt = new SimpleDateFormat("yyyy/MM/dd EEE", Locale.getDefault());
+    private final SimpleDateFormat dateFmt = new SimpleDateFormat("M月d日", Locale.CHINA);
+    private final SimpleDateFormat weekFmt = new SimpleDateFormat("EEE", Locale.CHINA);
 
     private void tickClock() {
-        Date now = new Date();
-        tvTime.setText(timeFmt.format(now));
+        java.util.Calendar c = java.util.Calendar.getInstance();
+        Date now = c.getTime();
         tvDate.setText(dateFmt.format(now));
+        tvWeek.setText(weekFmt.format(now) + " · W" + c.get(java.util.Calendar.WEEK_OF_YEAR));
+        // 今年已过去的比例
+        int doy = c.get(java.util.Calendar.DAY_OF_YEAR);
+        int days = c.getActualMaximum(java.util.Calendar.DAY_OF_YEAR);
+        // 年进度条：已过去部分用品牌色，剩余部分空槽
+        yearBar.setParts(0, doy, 0, 0, Theme.BRAND_A);
+        yearBar.setTail(days - doy);
     }
 
     // ---- 服务器发现 ----
@@ -440,6 +474,10 @@ public class MainActivity extends Activity {
         if (firstRender) { final List<Agent> again = agents; cardRow.post(() -> renderCards(again)); }
         renderShare(agents);
         renderRecent(root.optJSONArray("recent"));
+        JSONArray pending = root.optJSONArray("pendingPermissions");
+        boolean hasPending = pending != null && pending.length() > 0;
+        kpisView.setVisibility(hasPending ? View.GONE : View.VISIBLE);
+        PermissionSheet.bindPendingBanner(this, permBanner, serverBase, pending, this::fetchState);
         firstRender = false;
     }
 
@@ -465,7 +503,7 @@ public class MainActivity extends Activity {
         // 不超过 4 张时均分铺满；更多则固定宽度横向滚动。
         // HorizontalScrollView 以 UNSPECIFIED 测量子 View，weight 不生效，所以直接算像素宽度。
         int cardW = n == 0 ? avail : n <= 4 ? (avail - gap * (n - 1)) / n : dp(230);
-        boolean wide = n <= 2;
+        int mode = n == 1 ? 3 : (n == 2 ? 2 : 1);
 
         List<String> seen = new ArrayList<>();
         for (int i = 0; i < n; i++) {
@@ -487,7 +525,7 @@ public class MainActivity extends Activity {
             lp.rightMargin = i < n - 1 ? gap : 0;
             c.root.setLayoutParams(lp);
             c.width = cardW;
-            c.setWide(wide);
+            c.setLayoutMode(mode);
             c.bind(a);
         }
         for (String id : new ArrayList<>(cards.keySet())) {
@@ -533,18 +571,22 @@ public class MainActivity extends Activity {
         dockLabel.setText(idle.isEmpty() ? "" : "空闲 " + idle.size());
     }
 
-    /** 一张运行中 agent 的卡片：保持同一组 View，数据变化时只做过渡。 */
+    /** 一张运行中 agent 的卡片：根据同屏数量自适应三栏（1张）/ 双栏（2张）/ 上下（3+张）。 */
     private final class Card {
         final LinearLayout root;
         final AgentIcon icon;
-        final TextView name, model, task, uptime, sub;
+        final TextView name, model, task, uptime, permBadge, sub;
         final CountText today;
         final SparkView spark;
+        final MixBar mix;
+        final TextView mixLegend, mixStats;
+        LinearLayout head, nameCol;
         int lastAccent;
         int width;
-        boolean wide = true;
+        int mode = 0;
 
-        final LinearLayout left, right;
+        final LinearLayout left, mid, right, mixBox;
+        final View leftSpacer;
 
         Card(String id) {
             root = new LinearLayout(MainActivity.this);
@@ -554,97 +596,159 @@ public class MainActivity extends Activity {
             root.setOnClickListener(v -> openDetail(id, lastAccent));
             Anim.pressable(root);
 
-            // 左栏：图标 + 名称 / 模型 + 当前任务
+            // 左栏：顶层（图标 + 名称/模型 + 运行时长）；底层（全宽任务标题 + 精简审批胶囊）
             left = new LinearLayout(MainActivity.this);
             left.setOrientation(LinearLayout.VERTICAL);
-            LinearLayout head = new LinearLayout(MainActivity.this);
+            head = new LinearLayout(MainActivity.this);
             head.setGravity(Gravity.CENTER_VERTICAL);
             icon = new AgentIcon(MainActivity.this);
             icon.setLive(true);
-            head.addView(icon, new LinearLayout.LayoutParams(dp(52), dp(52)));
+            head.addView(icon, new LinearLayout.LayoutParams(dp(42), dp(42)));
             LinearLayout nc = new LinearLayout(MainActivity.this);
+            nameCol = nc;
             nc.setOrientation(LinearLayout.VERTICAL);
-            nc.setPadding(dp(10), 0, 0, 0);
-            name = Theme.text(MainActivity.this, Theme.TEXT, 18, Theme.BOLD);
+            nc.setPadding(dp(10), 0, dp(6), 0);
+            name = Theme.text(MainActivity.this, Theme.TEXT, 17, Theme.BOLD);
             name.setSingleLine(true);
             name.setEllipsize(TextUtils.TruncateAt.END);
             nc.addView(name);
-            model = Theme.text(MainActivity.this, Theme.MUTED, 10.5f, null);
+
+            model = Theme.text(MainActivity.this, Theme.MUTED, 11f, null);
             model.setSingleLine(true);
-            model.setEllipsize(TextUtils.TruncateAt.MIDDLE);
-            model.setPadding(0, dp(4), 0, 0);
+            model.setEllipsize(TextUtils.TruncateAt.END);
+            model.setPadding(0, dp(3), 0, 0);
             nc.addView(model);
             head.addView(nc, new LinearLayout.LayoutParams(0, -2, 1f));
+
             uptime = Theme.text(MainActivity.this, Theme.GREEN, 10.5f, Theme.MEDIUM);
             uptime.setFontFeatureSettings("tnum");
+            uptime.setSingleLine(true);
             uptime.setPadding(dp(8), dp(3), dp(8), dp(3));
             uptime.setBackground(Theme.pill(MainActivity.this, Theme.GREEN, 0.14f));
-            head.addView(uptime);
+            head.addView(uptime, new LinearLayout.LayoutParams(-2, -2));
             left.addView(head);
 
-            task = Theme.text(MainActivity.this, Theme.TEXT, 12.5f, null);
-            task.setMaxLines(2);
-            task.setEllipsize(TextUtils.TruncateAt.END);
-            task.setLineSpacing(dp(2), 1f);
-            task.setAlpha(0.85f);
-            LinearLayout.LayoutParams tLp = new LinearLayout.LayoutParams(-1, -2);
-            tLp.topMargin = dp(10);
-            left.addView(task, tLp);
+            leftSpacer = new View(MainActivity.this);
+            left.addView(leftSpacer, new LinearLayout.LayoutParams(1, 0, 1f));
 
-            // 右栏：今日用量 + 累计 / 会话 + 走势线
-            right = new LinearLayout(MainActivity.this);
-            right.setOrientation(LinearLayout.VERTICAL);
-            LinearLayout foot = new LinearLayout(MainActivity.this);
-            foot.setGravity(Gravity.BOTTOM);
+            // 底层：左为任务标题，右为紧凑审批胶囊（无 emoji，点击打开会话授权详情）
+            LinearLayout taskRow = new LinearLayout(MainActivity.this);
+            taskRow.setGravity(Gravity.CENTER_VERTICAL);
+            task = Theme.text(MainActivity.this, Theme.TEXT, 12.5f, null);
+            task.setPadding(dp(9), dp(2), dp(6), dp(2));
+            task.setSingleLine(true);
+            task.setEllipsize(TextUtils.TruncateAt.END);
+            task.setAlpha(0.90f);
+            taskRow.addView(task, new LinearLayout.LayoutParams(0, -2, 1f));
+
+            permBadge = Theme.text(MainActivity.this, Theme.BRAND_A, 10f, Theme.BOLD);
+            permBadge.setSingleLine(true);
+            permBadge.setPadding(dp(8), dp(3), dp(8), dp(3));
+            permBadge.setClickable(true);
+            Anim.pressable(permBadge);
+            LinearLayout.LayoutParams pmLp = new LinearLayout.LayoutParams(-2, -2);
+            pmLp.leftMargin = dp(6);
+            taskRow.addView(permBadge, pmLp);
+            LinearLayout.LayoutParams trLp = new LinearLayout.LayoutParams(-1, -2);
+            trLp.topMargin = dp(6);
+            left.addView(taskRow, trLp);
+
+            // 中栏：今日用量 + token 构成
+            mid = new LinearLayout(MainActivity.this);
+            mid.setOrientation(LinearLayout.VERTICAL);
+            mixBox = new LinearLayout(MainActivity.this);
+            mixBox.setOrientation(LinearLayout.VERTICAL);
+            mix = new MixBar(MainActivity.this);
+            mixBox.addView(mix, new LinearLayout.LayoutParams(-1, dp(6)));
+            mixStats = Theme.text(MainActivity.this, Theme.MUTED, 10f, null);
+            mixStats.setFontFeatureSettings("tnum");
+            mixStats.setSingleLine(true);
+            mixStats.setEllipsize(TextUtils.TruncateAt.END);
+            mixStats.setPadding(0, dp(5), 0, 0);
+            mixBox.addView(mixStats);
+
             LinearLayout tc = new LinearLayout(MainActivity.this);
             tc.setOrientation(LinearLayout.VERTICAL);
+            LinearLayout tlRow = new LinearLayout(MainActivity.this);
+            tlRow.setGravity(Gravity.CENTER_VERTICAL);
             TextView tl = Theme.text(MainActivity.this, Theme.MUTED, 10, Theme.MEDIUM);
             tl.setText("今日");
+            tl.setSingleLine(true);
             tl.setLetterSpacing(0.08f);
-            tc.addView(tl);
+            tlRow.addView(tl, new LinearLayout.LayoutParams(0, -2, 1f));
+            mixLegend = Theme.text(MainActivity.this, Theme.FAINT, 10, null);
+            mixLegend.setSingleLine(true);
+            mixLegend.setFontFeatureSettings("tnum");
+            tlRow.addView(mixLegend);
+            tc.addView(tlRow);
             today = new CountText(MainActivity.this);
-            today.setTextSize(26);
+            today.setTextSize(24);
             today.setTypeface(Theme.BOLD);
-            today.setPadding(0, dp(3), 0, 0);
+            today.setPadding(0, dp(2), 0, 0);
             tc.addView(today);
-            foot.addView(tc, new LinearLayout.LayoutParams(0, -2, 1f));
+            mid.addView(tc);
+            mid.addView(new View(MainActivity.this), new LinearLayout.LayoutParams(1, 0, 1f));
+            mid.addView(mixBox);
+
+            // 右栏：累计 / 会话 + 带刻度的走势线
+            right = new LinearLayout(MainActivity.this);
+            right.setOrientation(LinearLayout.VERTICAL);
             sub = Theme.text(MainActivity.this, Theme.MUTED, 10.5f, null);
             sub.setGravity(Gravity.END);
-            sub.setLineSpacing(dp(3), 1f);
-            foot.addView(sub);
-            right.addView(foot);
+            sub.setFontFeatureSettings("tnum");
+            sub.setSingleLine(true);
+            sub.setEllipsize(TextUtils.TruncateAt.END);
+            right.addView(sub, new LinearLayout.LayoutParams(-1, -2));
             spark = new SparkView(MainActivity.this);
+            spark.setAxis(true);
             LinearLayout.LayoutParams spLp = new LinearLayout.LayoutParams(-1, 0, 1f);
             spLp.topMargin = dp(6);
             right.addView(spark, spLp);
 
             root.addView(left);
+            root.addView(mid);
             root.addView(right);
-            wide = false;
-            setWide(true);
+            setLayoutMode(3);
         }
 
-        /** 宽：左右两栏；窄：上下排，隐藏任务标题。 */
-        void setWide(boolean on) {
-            if (on == wide) return;
-            wide = on;
-            root.setOrientation(on ? LinearLayout.HORIZONTAL : LinearLayout.VERTICAL);
-            if (on) {
+        /**
+         * m=3：全宽单卡，左/中/右三栏全开；
+         * m=2：两张并排，隐藏中栏，左右两栏（左栏给足宽度容纳名称、模型与审批胶囊，右栏显示今日用量与走势）；
+         * m=1：三张以上，上下排。
+         */
+        void setLayoutMode(int m) {
+            if (m == mode) return;
+            mode = m;
+            root.setOrientation(m >= 2 ? LinearLayout.HORIZONTAL : LinearLayout.VERTICAL);
+            if (m == 3) {
+                mid.setVisibility(View.VISIBLE);
+                leftSpacer.setVisibility(View.VISIBLE);
                 left.setLayoutParams(new LinearLayout.LayoutParams(0, -1, 1.15f));
-                LinearLayout.LayoutParams r = new LinearLayout.LayoutParams(0, -1, 1f);
-                r.leftMargin = dp(18);
-                right.setLayoutParams(r);
+                LinearLayout.LayoutParams mp = new LinearLayout.LayoutParams(0, -1, 1.15f);
+                mp.leftMargin = dp(18);
+                mid.setLayoutParams(mp);
+                LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(0, -1, 0.95f);
+                rp.leftMargin = dp(18);
+                right.setLayoutParams(rp);
+            } else if (m == 2) {
+                mid.setVisibility(View.GONE);
+                leftSpacer.setVisibility(View.VISIBLE);
+                left.setLayoutParams(new LinearLayout.LayoutParams(0, -1, 1.25f));
+                LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(0, -1, 0.95f);
+                rp.leftMargin = dp(14);
+                right.setLayoutParams(rp);
             } else {
+                mid.setVisibility(View.GONE);
+                leftSpacer.setVisibility(View.GONE);
                 left.setLayoutParams(new LinearLayout.LayoutParams(-1, -2));
-                LinearLayout.LayoutParams r = new LinearLayout.LayoutParams(-1, 0, 1f);
-                r.topMargin = dp(8);
-                right.setLayoutParams(r);
+                LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(-1, 0, 1f);
+                rp.topMargin = dp(6);
+                right.setLayoutParams(rp);
             }
-            task.setVisibility(on ? View.VISIBLE : View.GONE);
-            today.setTextSize(on ? 26 : 20);
-            name.setTextSize(on ? 18 : 14.5f);
+            spark.setAxis(m >= 2);
+            name.setTextSize(m == 3 ? 18 : (m == 2 ? 16.5f : 15f));
             ViewGroup.LayoutParams il = icon.getLayoutParams();
-            il.width = il.height = dp(on ? 52 : 38);
+            il.width = il.height = dp(m >= 2 ? 42 : 34);
             icon.setLayoutParams(il);
         }
 
@@ -655,23 +759,95 @@ public class MainActivity extends Activity {
                 today.setTextColor(accent);
                 icon.setAgent(a.id, a.name, accent);
                 root.setBackground(Theme.panel(MainActivity.this, accent, 0.22f, 20));
+                task.setBackground(new QuoteBar(accent, dp(3)));
             }
             icon.setStatus(Theme.GREEN, true);
             name.setText(a.name);
-            // 宽卡片左栏约占 1.15/2.15，再扣掉图标与运行时长胶囊
-            int nameW = wide ? (int) ((width - dp(50)) * 1.15f / 2.15f) - dp(130) : width - dp(110);
-            fitText(name, a.name, nameW, wide ? 18 : 14.5f, 10);
-            model.setText(a.topModel.isEmpty() ? (a.procCount > 0 ? "进程 " + a.procCount : "运行中") : a.topModel);
+            int nameW = nameCol.getWidth() - nameCol.getPaddingLeft() - nameCol.getPaddingRight();
+            if (nameW > 0) fitText(name, a.name, nameW, mode == 3 ? 17.5f : 16f, 12);
+            model.setText(a.topModel.isEmpty() ? (a.procCount > 0 ? "进程 " + a.procCount : "运行中") : shortModel(a.topModel));
             uptime.setText(a.uptimeSec > 0 ? dur(a.uptimeSec) : "LIVE");
+
+            int pmc = PermissionSheet.modeColor(a.topPermMode);
+            permBadge.setText((mode == 3 ? PermissionSheet.modeLabel(a.topPermMode) : PermissionSheet.modeShortLabel(a.topPermMode)) + " ›");
+            permBadge.setTextColor(pmc);
+            permBadge.setBackground(Theme.pill(MainActivity.this, pmc, 0.16f));
+            final String sid = a.topSessionId;
+            final String aid = a.id;
+            final int acc = accent;
+            permBadge.setOnClickListener(v -> PermissionSheet.showSessionSheet(MainActivity.this, serverBase != null ? serverBase : "", aid, sid, acc));
+            task.setClickable(true);
+            task.setOnClickListener(v -> PermissionSheet.showSessionSheet(MainActivity.this, serverBase != null ? serverBase : "", aid, sid, acc));
 
             String t = a.topTitle == null ? "" : a.topTitle.replaceAll("\\s+", " ").trim();
             task.setText(t.isEmpty() ? "正在运行，暂无会话标题" : t);
 
             today.setValue(a.todayTokens);
-            sub.setText((a.tokensTotal > 0 ? "累计 " + Theme.fmt(a.tokensTotal) : "无用量记录")
-                    + "\n" + a.sessions + " 会话" + (a.share > 0 ? " · " + a.share + "%" : ""));
+            if (mode == 3) {
+                sub.setText((a.tokensTotal > 0 ? "累计 " + Theme.fmtShort(a.tokensTotal) + " · " : "")
+                        + a.sessions + " 会话" + (a.share > 0 ? " · " + a.share + "%" : ""));
+            } else {
+                // 双卡/多卡时把今日用量高亮写在右栏顶部
+                sub.setGravity(mode == 2 ? Gravity.END : Gravity.START);
+                android.text.SpannableStringBuilder sb = new android.text.SpannableStringBuilder();
+                sb.append("今日 ");
+                int st = sb.length();
+                sb.append(Theme.fmt(a.todayTokens));
+                sb.setSpan(new android.text.style.ForegroundColorSpan(accent), st, sb.length(), 0);
+                sb.setSpan(new android.text.style.StyleSpan(Typeface.BOLD), st, sb.length(), 0);
+                if (a.tokensTotal > 0) sb.append("  ·  累计 ").append(Theme.fmtShort(a.tokensTotal));
+                else if (a.sessions > 0) sb.append("  ·  ").append(String.valueOf(a.sessions)).append(" 会话");
+                sub.setText(sb);
+            }
             spark.setData(a.series, accent);
+
+            mix.setParts(a.tokCacheR, a.tokIn, a.tokCacheW, a.tokOut, accent);
+            long sum = a.tokCacheR + a.tokIn + a.tokCacheW + a.tokOut;
+            mixLegend.setText(sum > 0 ? "缓存 " + Math.round(a.tokCacheR * 100.0 / sum) + "%" : "");
+            mixStats.setText(legend(accent,
+                    "缓存", a.tokCacheR + a.tokCacheW, Theme.alpha(accent, 0.55f),
+                    "输入", a.tokIn, accent,
+                    "输出", a.tokOut, Theme.mix(accent, 0xFFFFFFFF, 0.75f)));
         }
+
+        /** 「● 缓存 301M  ● 输入 67M  ● 输出 2.8M」，圆点与数值各自着色。 */
+        private CharSequence legend(int accent, Object... kv) {
+            android.text.SpannableStringBuilder sb = new android.text.SpannableStringBuilder();
+            for (int i = 0; i < kv.length; i += 3) {
+                if (sb.length() > 0) sb.append("  ");
+                int color = (int) kv[i + 2];
+                int st = sb.length();
+                sb.append("●");
+                sb.setSpan(new android.text.style.ForegroundColorSpan(color), st, sb.length(), 0);
+                sb.append((String) kv[i]).append('\u2009');
+                st = sb.length();
+                sb.append(Theme.fmtShort((long) kv[i + 1]));
+                sb.setSpan(new android.text.style.ForegroundColorSpan(Theme.TEXT), st, sb.length(), 0);
+                sb.setSpan(new android.text.style.StyleSpan(Typeface.BOLD), st, sb.length(), 0);
+            }
+            return sb;
+        }
+    }
+
+    /** 任务标题左侧的强调色竖线。 */
+    private static final class QuoteBar extends android.graphics.drawable.Drawable {
+        private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final int w;
+        QuoteBar(int color, int w) { p.setColor(Theme.alpha(color, 0.8f)); this.w = w; }
+        @Override public void draw(android.graphics.Canvas c) {
+            android.graphics.Rect b = getBounds();
+            c.drawRoundRect(b.left, b.top, b.left + w, b.bottom, w / 2f, w / 2f, p);
+        }
+        @Override public void setAlpha(int a) { p.setAlpha(a); }
+        @Override public void setColorFilter(android.graphics.ColorFilter f) { p.setColorFilter(f); }
+        @Override public int getOpacity() { return android.graphics.PixelFormat.TRANSLUCENT; }
+    }
+
+    /** 只保留模型名本身：去掉 provider/网关前缀和 [1m] 这类上下文标记。 */
+    static String shortModel(String m) {
+        String s = m.replaceAll("\\[[^\\]]*\\]$", "");
+        int slash = s.lastIndexOf('/');
+        return slash >= 0 && slash < s.length() - 1 ? s.substring(slash + 1) : s;
     }
 
     private static String dur(long sec) {
@@ -752,9 +928,14 @@ public class MainActivity extends Activity {
         for (int i = 0; i < n; i++) {
             JSONObject r = rj.getJSONObject(i);
             final String agentId = r.optString("agent", "");
+            final String sessionId = r.optString("sessionId", "");
             final int color = Theme.color(r.optString("color", ""), Theme.MUTED);
             View rv = recentRow(r, color);
-            rv.setOnClickListener(v -> { if (!agentId.isEmpty()) openDetail(agentId, color); });
+            rv.setOnClickListener(v -> {
+                if (!agentId.isEmpty()) {
+                    PermissionSheet.showSessionSheet(this, serverBase != null ? serverBase : "", agentId, sessionId, color);
+                }
+            });
             Anim.pressable(rv);
             recentList.addView(rv);
             if (animate) Anim.enter(rv, (firstRender ? 420 : 0) + i * 50L, dp(10));

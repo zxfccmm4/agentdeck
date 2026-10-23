@@ -17,12 +17,14 @@ public class Agent {
     public long weekTokens;
     public long lastAt;
     public long tokensTotal;
+    /** token 构成：输入 / 输出 / 缓存读 / 缓存写 */
+    public long tokIn, tokOut, tokCacheR, tokCacheW;
     public double costUsd;
     public int share;
     /** 近 12 小时逐小时 token，旧 -> 新 */
     public long[] series = new long[0];
-    /** 最近一条会话的标题与模型（服务端 top[0]） */
-    public String topTitle = "", topModel = "";
+    /** 最近一条会话的标题、模型、ID 与授权模式（服务端 top[0]） */
+    public String topTitle = "", topModel = "", topSessionId = "", topPermMode = "";
     /** 运行中进程里最长的运行时长（秒），无进程为 0 */
     public long uptimeSec;
 
@@ -72,7 +74,12 @@ public class Agent {
         org.json.JSONArray top = o.optJSONArray("top");
         if (top != null && top.length() > 0) {
             org.json.JSONObject s = top.optJSONObject(0);
-            if (s != null) { a.topTitle = s.optString("title", ""); a.topModel = s.optString("model", ""); }
+            if (s != null) {
+                a.topTitle = s.optString("title", "");
+                a.topModel = s.optString("model", "");
+                a.topSessionId = s.optString("sessionId", "");
+                a.topPermMode = s.optString("permissionMode", "");
+            }
         }
         org.json.JSONArray procs = o.optJSONArray("processes");
         if (procs != null) for (int i = 0; i < procs.length(); i++) {
@@ -80,7 +87,13 @@ public class Agent {
             if (p != null) a.uptimeSec = Math.max(a.uptimeSec, p.optLong("uptimeSec", 0));
         }
         final org.json.JSONObject t = o.optJSONObject("tokens");
-        if (t != null) a.tokensTotal = t.optLong("total", 0);
+        if (t != null) {
+            a.tokensTotal = t.optLong("total", 0);
+            a.tokIn = t.optLong("input", 0);
+            a.tokOut = t.optLong("output", 0);
+            a.tokCacheR = t.optLong("cacheRead", 0);
+            a.tokCacheW = t.optLong("cacheWrite", 0);
+        }
         return a;
     }
 

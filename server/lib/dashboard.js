@@ -3,6 +3,12 @@
 const path = require('path');
 const { startOfToday, hourlySeries, pct, bucketedSeries } = require('./util');
 const { probe } = require('./processes');
+const {
+  getPendingList,
+  getHistoryList,
+  collectPermissionRules,
+  parseSessionPermissions,
+} = require('./permissions');
 
 const AGENTS = [
   require('./agents/claude'),
@@ -64,6 +70,7 @@ function summarize(agent, sessions) {
     lastAt,
     series: hourlySeries(dayEvents.length ? events : [], 12, now),
     top: sessions.slice(0, 6).map((s) => ({
+      sessionId: s.sessionId || '',
       title: s.title,
       model: s.model,
       cwd: s.cwd,
@@ -73,6 +80,8 @@ function summarize(agent, sessions) {
       active: s.lastAt && now - s.lastAt < ACTIVE_MS,
       indexOnly: !!s.indexOnly,
       taskStatus: s.taskStatus || null,
+      permissionMode: s.permissionMode || null,
+      tools: s.tools || [],
     })),
   };
 }
@@ -148,6 +157,8 @@ async function buildDashboard({ host } = {}) {
     series,
     recent,
     processes: procs.length,
+    pendingPermissions: getPendingList(),
+    permissionHistory: getHistoryList().slice(0, 8),
   };
 }
 
@@ -180,6 +191,8 @@ function agentDetail(id) {
     active: s.lastAt && now - s.lastAt < ACTIVE_MS,
     taskStatus: s.taskStatus || null,
     indexOnly: !!s.indexOnly,
+    permissionMode: s.permissionMode || null,
+    tools: s.tools || [],
   }));
   list.forEach((s) => { s.costUsd = signedCost(s.costUsd); });
 
@@ -201,6 +214,41 @@ function agentDetail(id) {
       daily: { labels: labels(daily.length, 24 * 3600 * 1000, now), data: daily },
     },
     totals: { ...t, costUsd: signedCost(t.costUsd) },
+    pendingPermissions: getPendingList().filter((p) => !p.agent || p.agent === mod.id),
+    permissionHistory: getHistoryList().filter((p) => !p.agent || p.agent === mod.id),
+    permissionRules: collectPermissionRules(),
+  };
+}
+
+// 单个会话的授权详情（模式、工具调用明细、权限规则、该会话审批历史）
+function sessionPermissionDetail(agentId, sessionId) {
+  const mod = AGENTS.find((m) => m.id === agentId);
+  if (!mod) return null;
+  let sessions = [];
+  try { sessions = mod.collect(0) || []; } catch { sessions = []; }
+  const s = sessions.find((x) => x.sessionId === sessionId) || sessions[0];
+  if (!s) return null;
+  const parsed = parseSessionPermissions(s.file);
+  const rules = collectPermissionRules(s.cwd);
+  return {
+    agent: mod.id,
+    agentName: mod.name,
+    color: mod.color,
+    sessionId: s.sessionId,
+    title: s.title,
+    cwd: s.cwd,
+    model: s.model,
+    lastAt: s.lastAt,
+    turns: s.turns || 0,
+    tokens: s.tokens,
+    permissionMode: parsed.permissionMode || s.permissionMode || rules.defaultMode || 'default',
+    mode: parsed.mode,
+    modeChanges: parsed.modeChanges,
+    tools: parsed.tools.length ? parsed.tools : (s.tools || []),
+    recentTools: parsed.recentTools,
+    rules,
+    pending: getPendingList().filter((p) => p.sessionId === s.sessionId),
+    history: getHistoryList(s.sessionId),
   };
 }
 
@@ -225,4 +273,4 @@ function labels(n, bucketMs, now = Date.now()) {
   return out;
 }
 
-module.exports = { buildDashboard, AGENT_META, AGENTS, agentDetail };
+module.exports = { buildDashboard, AGENT_META, AGENTS, agentDetail, sessionPermissionDetail };
