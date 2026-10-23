@@ -9,6 +9,14 @@ const PATTERNS = [
   { agent: 'opencode', re: /(^|\/)(opencode|opencode2)(\s|$)/i, exclude: /node_modules/i },
   { agent: 'omo', re: /(^|\/)(omo)(\s|$)/i, exclude: /node_modules|omo\.jsonc/i },
   { agent: 'dsh', re: /dsh-desktop|@deepseek-ai/i, exclude: /GPU|Cache|Helper \(Renderer\)/i },
+  // 只认主进程，Electron 的 Helper 子进程不重复计数
+  { agent: 'kiro', re: /Kiro\.app\/Contents\/MacOS\/|(^|\/)kiro-cli(\s|$)/, exclude: /Helper|crashpad/i },
+  { agent: 'antigravity', re: /Antigravity\.app\/Contents\/MacOS\/|antigravity-cli\/bin\//, exclude: /Helper|crashpad|language_server/i },
+  { agent: 'gemini', re: /(^|\/|\s)gemini(\s|$)|@google\/gemini-cli/, exclude: /gemini-web|magpie|node_modules\/\.bin/i },
+  { agent: 'codebuddy', re: /CodeBuddy\.app\/Contents\/MacOS\/|(^|\/|\s)codebuddy(\s|$)|@tencent-ai\/codebuddy/, exclude: /Helper|crashpad|Extension/i },
+  { agent: 'copilot', re: /(^|\/|\s)copilot(\s|$)|@github\/copilot\b/, exclude: /copilot-language-server|Helper|CopilotForXcode/i },
+  { agent: 'cursor', re: /Cursor\.app\/Contents\/MacOS\/|(^|\/)cursor-agent(\s|$)/, exclude: /Helper|crashpad|CursorUIViewService/i },
+  { agent: 'workbuddy', re: /WorkBuddy( AI)?\.app\/Contents\/MacOS\/|\.workbuddy\/binaries\//, exclude: /Helper|crashpad/i },
 ];
 
 function parseRows(stdout) {

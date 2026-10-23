@@ -11,6 +11,8 @@ const AGENTS = [
   require('./agents/opencode'),
   require('./agents/omo'),
   require('./agents/dsh'),
+  require('./agents/workbuddy'),
+  ...require('./agents/process-only'),
 ];
 
 const AGENT_META = AGENTS.map((a) => ({ id: a.id, name: a.name, color: a.color }));

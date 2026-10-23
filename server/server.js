@@ -110,10 +110,10 @@ function mergeHosts(local, remotes) {
     for (const a of h.agents || []) {
       const cur = agents.get(a.id) || {
         id: a.id, name: a.name, color: a.color,
-        status: 'idle', sessions: 0, activeSessions: 0, turns: 0,
+        status: a.status || 'missing', sessions: 0, activeSessions: 0, turns: 0,
         tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0, total: 0 },
         costUsd: 0, todayTokens: 0, weekTokens: 0, lastAt: 0,
-        series: new Array(12).fill(0), top: [], procCount: 0, hosts: [],
+        series: new Array(12).fill(0), top: [], procCount: 0, processes: [], hosts: [],
       };
       for (const k of Object.keys(cur.tokens)) cur.tokens[k] += a.tokens?.[k] || 0;
       cur.sessions += a.sessions || 0;
@@ -123,6 +123,8 @@ function mergeHosts(local, remotes) {
       cur.todayTokens += a.todayTokens || 0;
       cur.weekTokens += a.weekTokens || 0;
       cur.procCount += a.procCount || 0;
+      // 带上进程运行时长，App 卡片显示「已运行 xx」
+      for (const p of a.processes || []) cur.processes.push({ ...p, host: h.host });
       cur.lastAt = Math.max(cur.lastAt, a.lastAt || 0);
       (a.series || []).forEach((v, i) => { if (i < cur.series.length) cur.series[i] += v; });
       if (a.status === 'active') cur.status = 'active';
