@@ -40,7 +40,7 @@ public class KeepAliveService extends Service {
             nm.createNotificationChannel(ch);
         }
         return new Notification.Builder(this, CHANNEL_ID)
-                .setSmallIcon(android.R.drawable.ic_menu_view)
+                .setSmallIcon(R.drawable.ic_stat)
                 .setContentTitle("AgentDeck 桌面屏")
                 .setContentText("正在展示 agent 用量")
                 .setOngoing(true)

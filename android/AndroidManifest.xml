@@ -9,7 +9,9 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <application
         android:label="AgentDeck"
-        android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
+        android:theme="@style/AppTheme"
         android:usesCleartextTraffic="true">
         <activity
             android:name=".MainActivity"

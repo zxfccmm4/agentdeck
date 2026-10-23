@@ -4,7 +4,8 @@
 coding agent（Claude Code、Codex、pi、opencode、omo、dsh）及其用量。
 
 - 顶部：服务端、在线主机数、总 token、今日 token、花费、时钟
-- 中部：每个 agent 的卡片（状态点 · 名称 · 总 token · 会话数 · 今日用量）
+- 中部：**只显示正在运行的 agent**——品牌 logo（呼吸 + 旋转描边）、当前任务、模型、已运行时长、今日用量、12 小时走势；
+  其余用过的 agent 收进右下角去色 dock，点击同样进详情。都没在跑时显示空闲占位
 - 右上：环形图 = 各 agent token 占比
 - 底部：最近使用的 agent 会话
 - **点卡片/最近项 → 详情页**：近 72 小时 + 近 30 天 token 走势图、会话列表
@@ -26,8 +27,14 @@ Mac / 远端机器                    横向安卓手机
   `~/.claude/projects`、`~/.codex`、`~/.pi/agent/sessions`、
   `~/.local/share/opencode/opencode.db`、`~/.omo/tasks` 的会话与用量文件，
   聚合出状态快照。还支持聚合多台远端主机（见 `server/config.json`）。
-- **安卓端**（`android/`）：单 Activity + 前台保活服务，纯代码构建布局，
+- **安卓端**（`android/`）：主屏 + 详情页 + 前台保活服务，布局纯代码构建，
   无第三方依赖。通过 `adb reverse` 走 USB 访问服务端，最稳。
+  - `res/`：矢量 logo / 自适应启动图标、状态栏图标、页面转场动画、深色启动主题
+  - `res/drawable-nodpi/agent_*.png`：各 agent 品牌图标，来自 [LobeHub Icons](https://lobehub.com/zh/icons)
+    （`@lobehub/icons-static-png` dark 版，缩到 160px）；新增 agent 时在 `AgentIcon.resFor()` 里登记
+  - 动效：卡片入场与按压回弹、数字滚动、迷你走势线、占比环过渡、运行中呼吸点、走势图逐柱升起
+  - 常驻动效（logo、呼吸点）统一由 `Ambient` 以 10fps 刷新；旧手机上每多一个独立刷新源
+    都会触发整窗重绘，别在常驻 View 里自己 `postInvalidateOnAnimation()`
 
 ## 快速开始
 
@@ -72,6 +79,8 @@ adb shell am start -n com.agentdeck.desk/.MainActivity
 | opencode  | `~/.local/share/opencode/opencode.db`（session 表带用量）   |
 | omo       | `~/.omo/tasks/*.json` + 复用 opencode 存储                  |
 | dsh       | Electron 桌面端，无稳定用量导出；可置 `DSH_USAGE_FILE` 导入  |
+| WorkBuddy | `~/.workbuddy/workbuddy.db`（会话）+ `~/.workbuddy/traces/*/*.json`（每次运行的 token） |
+| Kiro / Antigravity / Gemini CLI / CodeBuddy / Copilot CLI / Cursor | 仅进程探测（`lib/agents/process-only.js`），运行时出现在主屏 |
 
 ## 连接方式选择
 

@@ -9,12 +9,15 @@ PLAT=$SDK/platforms/android-34/android.jar
 JH=${JAVA_HOME:-/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home}
 export JAVA_HOME=$JH
 
-VER_CODE=$(grep -o 'versionCode="[0-9]*"' AndroidManifest.xml >/dev/null 2>&1; echo "")
 OUT=${1:-build/agentdeck.apk}
 
-echo "[1/6] 编译 Java"
-rm -rf build/classes build/dex && mkdir -p build/classes build/dex
-"$JH/bin/javac" --release 11 -d build/classes -classpath "$PLAT" java/com/agentdeck/desk/*.java 2>&1 | grep -vE "过时的|Xlint|某些" || true
+echo "[1/6] 编译资源与 Java"
+rm -rf build/classes build/dex build/gen build/res && mkdir -p build/classes build/dex build/gen build/res build/pkg
+$BT/aapt2 compile --dir res -o build/res/res.zip
+$BT/aapt2 link -I "$PLAT" --manifest AndroidManifest.xml -o build/pkg/base.apk \
+  --java build/gen -R build/res/res.zip --auto-add-overlay \
+  --min-sdk-version 21 --target-sdk-version 29 --version-code 10 --version-name 2.0
+"$JH/bin/javac" --release 11 -d build/classes -classpath "$PLAT" java/com/agentdeck/desk/*.java build/gen/com/agentdeck/desk/R.java 2>&1 | grep -vE "过时的|Xlint|某些" || true
 
 echo "[2/6] 生成 dex"
 # build-tools 自带的 d8 对 JDK21 编出的字节码有 bug，用 Google Maven 的 R8
@@ -25,10 +28,7 @@ fi
 "$JH/bin/java" -cp "$R8_JAR" com.android.tools.r8.D8 --release --min-api 21 --lib "$PLAT" \
   --output build/dex build/classes/com/agentdeck/desk/*.class
 
-echo "[3/6] 打包资源与清单"
-rm -rf build/pkg && mkdir -p build/pkg
-$BT/aapt2 link -I "$PLAT" --manifest AndroidManifest.xml -o build/pkg/base.apk \
-  --min-sdk-version 21 --target-sdk-version 29 --version-code 9 --version-name 1.5
+echo "[3/6] 资源已在第 1 步打包"
 
 echo "[4/6] 注入 dex"
 cp build/pkg/base.apk build/app-unaligned.apk

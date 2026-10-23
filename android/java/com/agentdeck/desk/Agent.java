@@ -19,6 +19,12 @@ public class Agent {
     public long tokensTotal;
     public double costUsd;
     public int share;
+    /** 近 12 小时逐小时 token，旧 -> 新 */
+    public long[] series = new long[0];
+    /** 最近一条会话的标题与模型（服务端 top[0]） */
+    public String topTitle = "", topModel = "";
+    /** 运行中进程里最长的运行时长（秒），无进程为 0 */
+    public long uptimeSec;
 
     public static final String STATE_ACTIVE = "active";
     public static final String STATE_IDLE = "idle";
@@ -44,8 +50,12 @@ public class Agent {
         return "空闲";
     }
 
-    public static Agent fromJson(org.json.JSONObject o) {
+    public static Agent fromJson(org.json.JSONObject o, org.json.JSONArray series) {
         Agent a = new Agent();
+        if (series != null) {
+            a.series = new long[series.length()];
+            for (int i = 0; i < series.length(); i++) a.series[i] = series.optLong(i, 0);
+        }
         a.id = o.optString("id", a.id);
         a.name = o.optString("name", a.id);
         a.color = matchColor(o.optString("color", "#888888"));
@@ -59,6 +69,16 @@ public class Agent {
         a.lastAt = o.optLong("lastAt", 0);
         a.share = o.optInt("share", 0);
         a.costUsd = o.optDouble("costUsd", 0);
+        org.json.JSONArray top = o.optJSONArray("top");
+        if (top != null && top.length() > 0) {
+            org.json.JSONObject s = top.optJSONObject(0);
+            if (s != null) { a.topTitle = s.optString("title", ""); a.topModel = s.optString("model", ""); }
+        }
+        org.json.JSONArray procs = o.optJSONArray("processes");
+        if (procs != null) for (int i = 0; i < procs.length(); i++) {
+            org.json.JSONObject p = procs.optJSONObject(i);
+            if (p != null) a.uptimeSec = Math.max(a.uptimeSec, p.optLong("uptimeSec", 0));
+        }
         final org.json.JSONObject t = o.optJSONObject("tokens");
         if (t != null) a.tokensTotal = t.optLong("total", 0);
         return a;
