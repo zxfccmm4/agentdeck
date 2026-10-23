@@ -1,0 +1,7 @@
+node_modules/
+android/build/*.apk
+android/build/*.idsig
+android/build/app-*.apk
+android/build/debug.keystore
+server/config.json
+.DS_Store
