@@ -13,6 +13,7 @@
 //   GET /api/health           健康检查
 //   GET /                     简易 HTML 预览（浏览器直接看）
 let http = require('http');
+let dgram = require('dgram');
 let path = require('path');
 let fs = require('fs');
 const os = require('os');
@@ -27,8 +28,11 @@ const {
 
 const PORT = Number(process.env.PORT || argValue('--port') || 7777);
 const HOST = process.env.HOST || '0.0.0.0';
+const PUSH_TO = process.env.AGENTDECK_HUB || argValue('--push-to') || null;
 const CONFIG = loadConfig();
 const REMOTES = Array.isArray(CONFIG.remotes) ? CONFIG.remotes : [];
+const pushedHosts = new Map(); // host -> { state, at }
+const PUSH_TTL_MS = 15 * 1000;
 
 function argValue(flag) {
   const i = process.argv.indexOf(flag);
@@ -101,9 +105,17 @@ function mergeHosts(local, remotes) {
   const series = new Array(12).fill(0);
   const recent = [];
   const agents = new Map();
+  const mergedPending = [...getPendingList()];
 
   for (const h of hosts) {
     if (!h) continue;
+    if (h.remote && Array.isArray(h.pendingPermissions)) {
+      for (const p of h.pendingPermissions) {
+        if (!mergedPending.some((x) => x.id === p.id)) {
+          mergedPending.push({ ...p, host: h.host, remoteUrl: h.remoteUrl || '' });
+        }
+      }
+    }
     for (const k of Object.keys(totals.tokens)) totals.tokens[k] += (h.totals?.tokens?.[k] || 0);
     totals.costUsd += h.totals?.costUsd || 0;
     totals.todayTokens += h.totals?.todayTokens || 0;
@@ -164,15 +176,22 @@ function mergeHosts(local, remotes) {
     series,
     recent: recent.slice(0, 10),
     agentMeta: AGENT_META,
-    pendingPermissions: getPendingList(),
+    pendingPermissions: mergedPending,
     permissionHistory: getHistoryList().slice(0, 8),
   };
 }
 
 async function refresh() {
   const local = await buildDashboard({ host: hostLabel() });
-  const remotes = REMOTES.length ? await Promise.all(REMOTES.map(fetchRemote)) : [];
-  snapshot = mergeHosts(local, remotes);
+  const pulled = REMOTES.length ? await Promise.all(REMOTES.map(fetchRemote)) : [];
+  const now = Date.now();
+  const pushed = [];
+  for (const [hName, item] of pushedHosts.entries()) {
+    const online = now - item.at <= PUSH_TTL_MS;
+    if (now - item.at > 10 * 60 * 1000) { pushedHosts.delete(hName); continue; }
+    pushed.push({ ...item.state, host: hName, remote: true, online });
+  }
+  snapshot = mergeHosts(local, [...pulled, ...pushed]);
   snapshotAt = Date.now();
   return snapshot;
 }
@@ -193,7 +212,18 @@ function broadcast() {
 
 // 每秒推一次
 setInterval(async () => {
-  try { await refresh(); broadcast(); } catch (e) { console.error('[agentdeck] refresh failed', e.message); }
+  try {
+    await refresh();
+    broadcast();
+    if (PUSH_TO && snapshot) {
+      const hubUrl = PUSH_TO.replace(/\/$/, '') + '/api/push';
+      fetch(hubUrl, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-agentdeck-host': hostLabel() },
+        body: JSON.stringify(await buildDashboard({ host: hostLabel() })),
+      }).catch(() => {});
+    }
+  } catch (e) { console.error('[agentdeck] refresh failed', e.message); }
 }, 1000);
 
 setOnChange(() => {
@@ -300,6 +330,24 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  // 远端设备主动上报接口（无需暴露远端端口，适合 VPS / 笔记本推送到主控端）
+  if (url.pathname === '/api/push' && req.method === 'POST') {
+    try {
+      const body = await readBodyJson(req);
+      const hName = String(body.host || req.headers['x-agentdeck-host'] || 'remote');
+      pushedHosts.set(hName, { state: body, at: Date.now() });
+      refresh().then(() => broadcast()).catch(() => {});
+      return send(200, JSON.stringify({ ok: true, host: hName, pendingPermissions: getPendingList() }));
+    } catch (e) {
+      return send(400, JSON.stringify({ ok: false, error: e.message }));
+    }
+  }
+
+  if (url.pathname === '/api/hosts' && req.method === 'GET') {
+    const s = await ensureFresh();
+    return send(200, JSON.stringify({ hosts: s.hosts || [] }));
+  }
+
   if (url.pathname === '/api/stream') {
     res.writeHead(200, {
       'content-type': 'text/event-stream',
@@ -328,3 +376,17 @@ server.listen(PORT, HOST, () => {
   for (const a of addrs) console.log(`[agentdeck]   http://${a}:${PORT}`);
   if (REMOTES.length) console.log(`[agentdeck] 远端主机 ${REMOTES.length} 台: ${REMOTES.map((r) => r.name || r.url).join(', ')}`);
 });
+
+// UDP 局域网秒级发现探针（端口与 HTTP 相同，安卓端无需 adb 即可 50ms 内自动发现服务端）
+try {
+  const udp = dgram.createSocket('udp4');
+  udp.on('message', (msg, rinfo) => {
+    const s = String(msg || '').trim();
+    if (s.startsWith('AGENTDECK_DISCOVER')) {
+      const reply = JSON.stringify({ agentdeck: 1, host: hostLabel(), port: PORT });
+      udp.send(reply, rinfo.port, rinfo.address, () => {});
+    }
+  });
+  udp.on('error', () => {});
+  udp.bind(PORT);
+} catch {}

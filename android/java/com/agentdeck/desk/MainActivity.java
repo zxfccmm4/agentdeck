@@ -183,16 +183,22 @@ public class MainActivity extends Activity {
 
         LinearLayout conn = new LinearLayout(this);
         conn.setGravity(Gravity.CENTER_VERTICAL);
-        conn.setPadding(0, dp(4), 0, 0);
+        conn.setPadding(dp(6), dp(3), dp(8), dp(3));
+        conn.setBackground(Theme.panel(this, Theme.BRAND_B, 0.06f, 99));
+        conn.setClickable(true);
+        conn.setOnClickListener(v -> showServerConfigDialog());
+        Anim.pressable(conn);
+        LinearLayout.LayoutParams connLp = new LinearLayout.LayoutParams(-2, -2);
+        connLp.topMargin = dp(3);
         connDot = new PulseDot(this);
         connDot.setState(Theme.MUTED, true);
         conn.addView(connDot, new LinearLayout.LayoutParams(dp(14), dp(14)));
-        tvConn = Theme.text(this, Theme.MUTED, 12, null);
+        tvConn = Theme.text(this, Theme.MUTED, 11.5f, null);
         tvConn.setText("正在连接服务端…");
         tvConn.setPadding(dp(4), 0, 0, 0);
         tvConn.setSingleLine(true);
         conn.addView(tvConn);
-        brand.addView(conn);
+        brand.addView(conn, connLp);
         top.addView(brand, new LinearLayout.LayoutParams(-2, -2));
         top.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1f));
         top.addView(buildShare(), new LinearLayout.LayoutParams(-2, dp(46)));
@@ -343,25 +349,134 @@ public class MainActivity extends Activity {
         yearBar.setTail(days - doy);
     }
 
-    // ---- 服务器发现 ----
+    // ---- 服务器发现（支持 USB / 手动配置 / UDP 广播秒级发现 / 并发局域网扫描） ----
     private void startServerDiscovery() {
         new Thread(() -> {
-            // USB 模式：adb reverse 把 127.0.0.1:7777 转发到 Mac（纯 USB 最可靠）
-            for (int attempt = 0; attempt < 3; attempt++) {
-                if (probe("http://127.0.0.1:7777")) { Log.i(TAG, "USB模式命中 127.0.0.1:7777"); setServer("http://127.0.0.1:7777"); return; }
-                try { Thread.sleep(500); } catch (InterruptedException ignored) {}
-            }
+            // 1. 优先尝试用户手动保存的非本地地址或上次成功地址
             String saved = prefs.getString("server", null);
-            if (saved != null && !saved.contains("127.0.0.1") && probe(saved)) { setServer(saved); return; }
+            if (saved != null && probe(saved)) { setServer(saved); return; }
+            // 2. USB 模式：adb reverse 把 127.0.0.1:7777 转发到 Mac
+            for (int attempt = 0; attempt < 2; attempt++) {
+                if (probe("http://127.0.0.1:7777")) { Log.i(TAG, "USB模式命中 127.0.0.1:7777"); setServer("http://127.0.0.1:7777"); return; }
+                try { Thread.sleep(300); } catch (InterruptedException ignored) {}
+            }
             String env = System.getenv(ENV_SERVER);
             if (env != null && env.length() > 0 && probe(env)) { setServer(env); return; }
-            String scan = scanLan();
+            // 3. UDP 局域网广播发现（50ms 内秒级响应，无需 adb）
+            String udpHit = discoverViaUdp();
+            if (udpHit != null && probe(udpHit)) { setServer(udpHit); return; }
+            // 4. 并发局域网网段扫描（約 1.5s 扫完整个 /24）
+            String scan = scanLanParallel();
             if (scan != null) setServer(scan);
             else {
                 Log.w(TAG, "未找到任何服务端");
-                ui.post(() -> setConn(false, "未找到服务端 · 请先 adb reverse tcp:7777 tcp:7777"));
+                ui.post(() -> setConn(false, "未找到服务端 · 点击此处配置 IP 或局域网扫描"));
             }
         }).start();
+    }
+
+    private String discoverViaUdp() {
+        java.net.DatagramSocket sock = null;
+        try {
+            sock = new java.net.DatagramSocket();
+            sock.setBroadcast(true);
+            sock.setSoTimeout(700);
+            byte[] req = "AGENTDECK_DISCOVER".getBytes("UTF-8");
+            sock.send(new java.net.DatagramPacket(req, req.length,
+                    InetAddress.getByName("255.255.255.255"), 7777));
+            String lip = localIp();
+            if (lip != null && lip.contains(".")) {
+                String bcast = lip.substring(0, lip.lastIndexOf('.') + 1) + "255";
+                sock.send(new java.net.DatagramPacket(req, req.length,
+                        InetAddress.getByName(bcast), 7777));
+            }
+            byte[] buf = new byte[512];
+            java.net.DatagramPacket resp = new java.net.DatagramPacket(buf, buf.length);
+            sock.receive(resp);
+            JSONObject j = new JSONObject(new String(resp.getData(), 0, resp.getLength(), "UTF-8"));
+            int port = j.optInt("port", 7777);
+            return "http://" + resp.getAddress().getHostAddress() + ":" + port;
+        } catch (Exception ignored) {
+            return null;
+        } finally {
+            if (sock != null) sock.close();
+        }
+    }
+
+    private String scanLanParallel() {
+        String ip = localIp();
+        if (ip == null) return null;
+        final String prefix = ip.substring(0, ip.lastIndexOf('.') + 1);
+        final java.util.concurrent.atomic.AtomicReference<String> found = new java.util.concurrent.atomic.AtomicReference<>(null);
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(24);
+        for (int i = 1; i <= 254; i++) {
+            final int host = i;
+            pool.submit(() -> {
+                if (found.get() != null) return;
+                String base = "http://" + prefix + host + ":7777";
+                if (probeFast(base, 450)) found.compareAndSet(null, base);
+            });
+        }
+        pool.shutdown();
+        try { pool.awaitTermination(2500, java.util.concurrent.TimeUnit.MILLISECONDS); } catch (InterruptedException ignored) {}
+        pool.shutdownNow();
+        return found.get();
+    }
+
+    private boolean probeFast(String base, int timeoutMs) {
+        try {
+            URL u = new URL(base + "/api/health");
+            HttpURLConnection c = (HttpURLConnection) u.openConnection();
+            c.setConnectTimeout(timeoutMs); c.setReadTimeout(timeoutMs);
+            int code = c.getResponseCode();
+            c.disconnect();
+            return code == 200;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private void showServerConfigDialog() {
+        android.app.AlertDialog.Builder b = new android.app.AlertDialog.Builder(this, android.app.AlertDialog.THEME_DEVICE_DEFAULT_DARK);
+        b.setTitle("连接其他设备 / 服务端地址");
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        int p = dp(16);
+        box.setPadding(p, dp(10), p, dp(6));
+
+        TextView hint = Theme.text(this, Theme.MUTED, 12, null);
+        String lip = localIp();
+        hint.setText("支持局域网 WiFi、Tailscale 异地组网或公网地址（无需 ADB）。\n本机局域网 IP: " + (lip != null ? lip : "未知"));
+        box.addView(hint);
+
+        final android.widget.EditText input = new android.widget.EditText(this);
+        input.setSingleLine(true);
+        input.setTextColor(Theme.TEXT);
+        input.setHintTextColor(Theme.FAINT);
+        input.setHint("例如 http://10.2.172.145:7777");
+        input.setText(serverBase != null ? serverBase : prefs.getString("server", "http://"));
+        box.addView(input);
+        b.setView(box);
+
+        b.setPositiveButton("连接并保存", (d, w) -> {
+            String raw = input.getText().toString().trim();
+            if (raw.isEmpty()) return;
+            if (!raw.startsWith("http://") && !raw.startsWith("https://")) raw = "http://" + raw;
+            if (!raw.matches(".*:\\d+$") && !raw.contains("/")) raw = raw + ":7777";
+            final String target = raw.replaceAll("/+$", "");
+            setConn(false, "正在连接 " + hostOf(target) + "…");
+            new Thread(() -> {
+                if (probe(target)) setServer(target);
+                else ui.post(() -> setConn(false, "无法连接 " + hostOf(target)));
+            }).start();
+        });
+        b.setNeutralButton("局域网自动搜索", (d, w) -> {
+            prefs.edit().remove("server").apply();
+            setConn(false, "正在搜索局域网服务端…");
+            startServerDiscovery();
+        });
+        b.setNegativeButton("取消", null);
+        b.show();
     }
 
     private void setServer(String base) {
