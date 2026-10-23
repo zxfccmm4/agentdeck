@@ -1,7 +1,5 @@
 node_modules/
-android/build/*.apk
-android/build/*.idsig
-android/build/app-*.apk
-android/build/debug.keystore
+# 构建产物全部由 android/build.sh 生成（含调试签名 keystore）
+android/build/
 server/config.json
 .DS_Store
